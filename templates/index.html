@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HPC Encrypted Inference</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 2rem;
+        max-width: 760px;
+      }
+      h1 {
+        margin-bottom: 0.5rem;
+      }
+      form,
+      .panel {
+        border: 1px solid #ccc;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+      }
+      label {
+        display: block;
+        margin-top: 0.75rem;
+        font-weight: bold;
+      }
+      input,
+      textarea,
+      select,
+      button {
+        width: 100%;
+        margin-top: 0.35rem;
+        padding: 0.5rem;
+        box-sizing: border-box;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+      }
+      button {
+        cursor: pointer;
+      }
+      #status {
+        font-family: Consolas, monospace;
+        white-space: pre-wrap;
+      }
+      #preview {
+        max-width: 100%;
+        margin-top: 1rem;
+        display: none;
+      }
+      .note {
+        color: #444;
+        font-size: 0.95rem;
+      }
+      #imagesRow.hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>HPC Encrypted Inference</h1>
+    <p class="note">
+      Paste the session key from the login node console. Fill the form and submit —
+      encryption happens in your browser before upload.
+    </p>
+
+    <form id="jobForm">
+      <label for="sessionKey">Session key</label>
+      <input
+        id="sessionKey"
+        name="sessionKey"
+        type="password"
+        autocomplete="off"
+        placeholder="Paste key from login node console"
+        required
+      />
+
+      <label for="model" id="modelLabel">Model</label>
+      <select id="model" name="model" required></select>
+
+      <div id="imagesRow">
+        <label for="images" id="imagesLabel">Images (1 or 2, required)</label>
+        <input id="images" name="images" type="file" accept="image/*" multiple />
+      </div>
+
+      <div id="florenceTaskRow" style="display: none">
+        <label for="florence_task">Florence task token</label>
+        <select id="florence_task" name="florence_task">
+          <option value="&lt;DESCRIPTION&gt;" selected>&lt;DESCRIPTION&gt;</option>
+          <option value="&lt;CAPTION&gt;">&lt;CAPTION&gt;</option>
+          <option value="&lt;DETAILED_CAPTION&gt;">&lt;DETAILED_CAPTION&gt;</option>
+          <option value="&lt;MORE_DETAILED_CAPTION&gt;">&lt;MORE_DETAILED_CAPTION&gt;</option>
+        </select>
+      </div>
+
+      <label for="prompt" id="promptLabel">Prompt</label>
+      <textarea id="prompt" name="prompt" rows="4" required></textarea>
+
+      <div id="negativePromptRow">
+        <label for="negative_prompt">Negative prompt</label>
+        <textarea id="negative_prompt" name="negative_prompt" rows="2"></textarea>
+      </div>
+
+      <div class="grid" id="inferenceParamsRow">
+        <div>
+          <label for="seed">Seed</label>
+          <input id="seed" name="seed" type="number" value="0" />
+        </div>
+        <div>
+          <label for="num_inference_steps">Inference steps</label>
+          <input id="num_inference_steps" name="num_inference_steps" type="number" value="40" />
+        </div>
+        <div>
+          <label for="guidance_scale">Guidance scale</label>
+          <input id="guidance_scale" name="guidance_scale" type="number" value="1.0" step="0.1" />
+        </div>
+        <div id="strengthRow" style="display: none">
+          <label for="strength">Strength (0–1)</label>
+          <input id="strength" name="strength" type="number" value="0.85" min="0" max="1" step="0.05" />
+        </div>
+      </div>
+      <button type="submit" id="submitBtn">Submit encrypted job</button>
+    </form>
+
+    <div class="panel">
+      <strong>Status</strong>
+      <div id="status">Loading models…</div>
+      <img id="preview" alt="Decrypted result preview" />
+    </div>
+
+    <script>
+      const JOB_MAGIC = new TextEncoder().encode("HPCENC02");
+      const OUT_MAGIC = "HPCOUT01";
+      const KEY_LEN = 32;
+
+      const form = document.getElementById("jobForm");
+      const statusEl = document.getElementById("status");
+      const previewEl = document.getElementById("preview");
+      const submitBtn = document.getElementById("submitBtn");
+      const modelSelect = document.getElementById("model");
+      const imagesRow = document.getElementById("imagesRow");
+      const imagesInput = document.getElementById("images");
+
+      let models = [];
+      let currentJobId = null;
+      let pollTimer = null;
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      function selectedModel() {
+        return models.find((m) => m.id === modelSelect.value);
+      }
+
+      function updateModelUi() {
+        const spec = selectedModel();
+        if (!spec) return;
+
+        const strengthRow = document.getElementById("strengthRow");
+        const negativePromptRow = document.getElementById("negativePromptRow");
+        const inferenceParamsRow = document.getElementById("inferenceParamsRow");
+        const florenceTaskRow = document.getElementById("florenceTaskRow");
+        const promptLabel = document.getElementById("promptLabel");
+        const imagesLabel = document.getElementById("imagesLabel");
+
+        if (spec.requires_images) {
+          imagesRow.classList.remove("hidden");
+          imagesInput.required = true;
+        } else {
+          imagesRow.classList.add("hidden");
+          imagesInput.required = false;
+          imagesInput.value = "";
+        }
+
+        if (spec.id === "florence2_flux") {
+          imagesLabel.textContent = "Image (required)";
+          promptLabel.textContent = "Instruction";
+          document.getElementById("prompt").placeholder =
+            "Describe this image in great detail.";
+          florenceTaskRow.style.display = "block";
+          negativePromptRow.style.display = "none";
+          inferenceParamsRow.style.display = "none";
+          strengthRow.style.display = "none";
+        } else {
+          imagesLabel.textContent = "Images (1 or 2, required)";
+          promptLabel.textContent = "Prompt";
+          document.getElementById("prompt").placeholder = "";
+          florenceTaskRow.style.display = "none";
+          negativePromptRow.style.display = "block";
+          inferenceParamsRow.style.display = "grid";
+
+          if (spec.id === "flux_uncensored") {
+            document.getElementById("num_inference_steps").value = "28";
+            document.getElementById("guidance_scale").value = "3.5";
+            document.getElementById("strength").value = "0.85";
+            strengthRow.style.display = "block";
+          } else if (spec.id === "qwen") {
+            document.getElementById("num_inference_steps").value = "40";
+            document.getElementById("guidance_scale").value = "1.0";
+            strengthRow.style.display = "none";
+          }
+        }
+      }
+
+      async function loadModels() {
+        const response = await fetch("/api/models");
+        if (!response.ok) throw new Error("Could not load model list.");
+        const body = await response.json();
+        models = body.models;
+        modelSelect.innerHTML = "";
+        for (const m of models) {
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.display_name;
+          modelSelect.appendChild(opt);
+        }
+        const showModelPicker = models.length > 1;
+        document.getElementById("modelLabel").style.display = showModelPicker ? "block" : "none";
+        modelSelect.style.display = showModelPicker ? "block" : "none";
+        modelSelect.addEventListener("change", updateModelUi);
+        updateModelUi();
+        setStatus("Paste session key and submit a job.");
+      }
+
+      function parseSessionKey(b64) {
+        const trimmed = b64.trim();
+        const padded = trimmed + "=".repeat((4 - (trimmed.length % 4)) % 4);
+        const binary = atob(padded);
+        if (binary.length !== KEY_LEN) {
+          throw new Error("Session key must decode to 32 bytes.");
+        }
+        const bytes = new Uint8Array(KEY_LEN);
+        for (let i = 0; i < KEY_LEN; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+      }
+
+      async function importAesKey(sessionKeyBytes) {
+        return crypto.subtle.importKey(
+          "raw",
+          sessionKeyBytes,
+          { name: "AES-GCM" },
+          false,
+          ["encrypt", "decrypt"]
+        );
+      }
+
+      async function fileToBase64(file) {
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      }
+
+      async function buildEncryptedJob(sessionKeyBytes, payload) {
+        const aesKey = await importAesKey(sessionKeyBytes);
+        const nonce = crypto.getRandomValues(new Uint8Array(12));
+        const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+        const ciphertext = new Uint8Array(
+          await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aesKey, plaintext)
+        );
+
+        const envelope = new Uint8Array(
+          JOB_MAGIC.length + nonce.length + ciphertext.length
+        );
+        envelope.set(JOB_MAGIC, 0);
+        envelope.set(nonce, JOB_MAGIC.length);
+        envelope.set(ciphertext, JOB_MAGIC.length + nonce.length);
+        return envelope;
+      }
+
+      async function decryptOutputBytes(sessionKeyBytes, blob) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const magic = new TextDecoder().decode(bytes.slice(0, 8));
+        if (magic !== OUT_MAGIC) throw new Error("Invalid encrypted output.");
+        const nonce = bytes.slice(8, 20);
+        const ciphertext = bytes.slice(20);
+        const aesKey = await importAesKey(sessionKeyBytes);
+        return new Uint8Array(
+          await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: nonce },
+            aesKey,
+            ciphertext
+          )
+        );
+      }
+
+      async function checkStatus(sessionKeyBytes) {
+        if (!currentJobId) return;
+        const response = await fetch(`/api/status/${currentJobId}`);
+        const body = await response.json();
+        setStatus(JSON.stringify(body, null, 2));
+
+        if (body.status === "done") {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          const resultResp = await fetch(`/api/result/${currentJobId}`);
+          if (!resultResp.ok) {
+            setStatus("Job done but encrypted result missing.");
+            return;
+          }
+          const plain = await decryptOutputBytes(
+            sessionKeyBytes,
+            await resultResp.blob()
+          );
+          if (body.output_kind === "text") {
+            previewEl.style.display = "none";
+            const text = new TextDecoder().decode(plain);
+            setStatus(`Job ${currentJobId} complete.\n\n${text}`);
+          } else {
+            previewEl.src = URL.createObjectURL(
+              new Blob([plain], { type: "image/png" })
+            );
+            previewEl.style.display = "block";
+            setStatus(`Job ${currentJobId} complete. Result decrypted in your browser.`);
+          }
+        } else if (body.status === "failed") {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          setStatus(
+            body.error
+              ? `Job ${currentJobId} failed: ${body.error}`
+              : `Job ${currentJobId} failed. Check GPU worker logs.`
+          );
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        previewEl.style.display = "none";
+
+        let sessionKeyBytes;
+        try {
+          sessionKeyBytes = parseSessionKey(
+            document.getElementById("sessionKey").value
+          );
+        } catch (err) {
+          setStatus(err.message);
+          return;
+        }
+
+        const spec = selectedModel();
+        if (!spec) {
+          setStatus("Select a model.");
+          return;
+        }
+
+        const files = imagesInput.files;
+        if (spec.requires_images && files.length < 1) {
+          setStatus("This model requires at least one image.");
+          return;
+        }
+        if (spec.id !== "florence2_flux" && spec.requires_images && files.length > 2) {
+          setStatus("This model accepts at most 2 images.");
+          return;
+        }
+        if (spec.id === "florence2_flux" && files.length !== 1) {
+          setStatus("Florence-2 requires exactly one image.");
+          return;
+        }
+
+        const images = [];
+        for (const file of files) {
+          images.push({
+            data_b64: await fileToBase64(file),
+            mime: file.type || "application/octet-stream",
+          });
+        }
+
+        const payload = {
+          model: spec.id,
+          prompt: document.getElementById("prompt").value.trim(),
+          negative_prompt: document.getElementById("negative_prompt").value,
+          seed: Number(document.getElementById("seed").value || 0),
+          num_inference_steps: Number(
+            document.getElementById("num_inference_steps").value || 30
+          ),
+          guidance_scale: Number(
+            document.getElementById("guidance_scale").value || 1.0
+          ),
+          num_images_per_prompt: 1,
+          images,
+        };
+
+        if (spec.id === "qwen") {
+          payload.true_cfg_scale = 4.0;
+        }
+        if (spec.id === "flux_uncensored") {
+          payload.strength = Number(document.getElementById("strength").value || 0.85);
+        }
+        if (spec.id === "florence2_flux") {
+          payload.florence_task = document.getElementById("florence_task").value;
+        }
+
+        if (!payload.prompt) {
+          setStatus("Prompt is required.");
+          return;
+        }
+
+        submitBtn.disabled = true;
+        setStatus("Encrypting job locally…");
+        try {
+          const envelope = await buildEncryptedJob(sessionKeyBytes, payload);
+          setStatus("Uploading ciphertext…");
+          const response = await fetch("/api/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: envelope,
+          });
+          const body = await response.json();
+          if (!response.ok) {
+            setStatus(JSON.stringify(body, null, 2));
+            return;
+          }
+          currentJobId = body.job_id;
+          setStatus(JSON.stringify(body, null, 2));
+          if (pollTimer) clearInterval(pollTimer);
+          pollTimer = setInterval(() => checkStatus(sessionKeyBytes), 2000);
+          await checkStatus(sessionKeyBytes);
+        } catch (err) {
+          setStatus(`Encryption/submit failed: ${err.message}`);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+
+      loadModels().catch((err) => setStatus(err.message));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+torch
+diffusers
+transformers
+accelerate
+safetensors
+pillow
+cryptography>=42.0
+huggingface_hub
+timm
+einops
