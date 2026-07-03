@@ -63,8 +63,8 @@
   <body>
     <h1>HPC Encrypted Inference</h1>
     <p class="note">
-      Paste the session key from the login node console. Fill the form and submit —
-      encryption happens in your browser before upload.
+      Paste the session key from the login node console. Choose a model, fill the form,
+      and submit — encryption happens in your browser before upload.
     </p>
 
     <form id="jobForm">
@@ -82,44 +82,32 @@
       <select id="model" name="model" required></select>
 
       <div id="imagesRow">
-        <label for="images" id="imagesLabel">Images (1 or 2, required)</label>
+        <label for="images">Images (1 or 2, required)</label>
         <input id="images" name="images" type="file" accept="image/*" multiple />
       </div>
 
-      <div id="florenceTaskRow" style="display: none">
-        <label for="florence_task">Florence task token</label>
-        <select id="florence_task" name="florence_task">
-          <option value="&lt;DESCRIPTION&gt;" selected>&lt;DESCRIPTION&gt;</option>
-          <option value="&lt;CAPTION&gt;">&lt;CAPTION&gt;</option>
-          <option value="&lt;DETAILED_CAPTION&gt;">&lt;DETAILED_CAPTION&gt;</option>
-          <option value="&lt;MORE_DETAILED_CAPTION&gt;">&lt;MORE_DETAILED_CAPTION&gt;</option>
-        </select>
-      </div>
-
-      <label for="prompt" id="promptLabel">Prompt</label>
+      <label for="prompt">Prompt</label>
       <textarea id="prompt" name="prompt" rows="4" required></textarea>
 
-      <div id="negativePromptRow">
-        <label for="negative_prompt">Negative prompt</label>
-        <textarea id="negative_prompt" name="negative_prompt" rows="2"></textarea>
-      </div>
+      <label for="negative_prompt">Negative prompt</label>
+      <textarea id="negative_prompt" name="negative_prompt" rows="2"></textarea>
 
-      <div class="grid" id="inferenceParamsRow">
+      <div class="grid">
         <div>
           <label for="seed">Seed</label>
           <input id="seed" name="seed" type="number" value="0" />
         </div>
         <div>
           <label for="num_inference_steps">Inference steps</label>
-          <input id="num_inference_steps" name="num_inference_steps" type="number" value="40" />
+          <input id="num_inference_steps" name="num_inference_steps" type="number" value="4" />
         </div>
         <div>
           <label for="guidance_scale">Guidance scale</label>
           <input id="guidance_scale" name="guidance_scale" type="number" value="1.0" step="0.1" />
         </div>
-        <div id="strengthRow" style="display: none">
-          <label for="strength">Strength (0–1)</label>
-          <input id="strength" name="strength" type="number" value="0.85" min="0" max="1" step="0.05" />
+        <div>
+          <label for="true_cfg_scale">True CFG scale</label>
+          <input id="true_cfg_scale" name="true_cfg_scale" type="number" value="1.0" step="0.1" />
         </div>
       </div>
       <button type="submit" id="submitBtn">Submit encrypted job</button>
@@ -159,14 +147,6 @@
       function updateModelUi() {
         const spec = selectedModel();
         if (!spec) return;
-
-        const strengthRow = document.getElementById("strengthRow");
-        const negativePromptRow = document.getElementById("negativePromptRow");
-        const inferenceParamsRow = document.getElementById("inferenceParamsRow");
-        const florenceTaskRow = document.getElementById("florenceTaskRow");
-        const promptLabel = document.getElementById("promptLabel");
-        const imagesLabel = document.getElementById("imagesLabel");
-
         if (spec.requires_images) {
           imagesRow.classList.remove("hidden");
           imagesInput.required = true;
@@ -175,35 +155,9 @@
           imagesInput.required = false;
           imagesInput.value = "";
         }
-
-        if (spec.id === "florence2_flux") {
-          imagesLabel.textContent = "Image (required)";
-          promptLabel.textContent = "Instruction";
-          document.getElementById("prompt").placeholder =
-            "Describe this image in great detail.";
-          florenceTaskRow.style.display = "block";
-          negativePromptRow.style.display = "none";
-          inferenceParamsRow.style.display = "none";
-          strengthRow.style.display = "none";
-        } else {
-          imagesLabel.textContent = "Images (1 or 2, required)";
-          promptLabel.textContent = "Prompt";
-          document.getElementById("prompt").placeholder = "";
-          florenceTaskRow.style.display = "none";
-          negativePromptRow.style.display = "block";
-          inferenceParamsRow.style.display = "grid";
-
-          if (spec.id === "flux_uncensored") {
-            document.getElementById("num_inference_steps").value = "28";
-            document.getElementById("guidance_scale").value = "3.5";
-            document.getElementById("strength").value = "0.85";
-            strengthRow.style.display = "block";
-          } else if (spec.id === "qwen") {
-            document.getElementById("num_inference_steps").value = "40";
-            document.getElementById("guidance_scale").value = "1.0";
-            strengthRow.style.display = "none";
-          }
-        }
+        document.getElementById("num_inference_steps").value = "4";
+        document.getElementById("guidance_scale").value = "1.0";
+        document.getElementById("true_cfg_scale").value = "1.0";
       }
 
       async function loadModels() {
@@ -350,16 +304,8 @@
         }
 
         const files = imagesInput.files;
-        if (spec.requires_images && files.length < 1) {
-          setStatus("This model requires at least one image.");
-          return;
-        }
-        if (spec.id !== "florence2_flux" && spec.requires_images && files.length > 2) {
-          setStatus("This model accepts at most 2 images.");
-          return;
-        }
-        if (spec.id === "florence2_flux" && files.length !== 1) {
-          setStatus("Florence-2 requires exactly one image.");
+        if (spec.requires_images && (files.length < 1 || files.length > 2)) {
+          setStatus("This model requires 1 or 2 images.");
           return;
         }
 
@@ -377,24 +323,17 @@
           negative_prompt: document.getElementById("negative_prompt").value,
           seed: Number(document.getElementById("seed").value || 0),
           num_inference_steps: Number(
-            document.getElementById("num_inference_steps").value || 30
+            document.getElementById("num_inference_steps").value || 4
           ),
           guidance_scale: Number(
             document.getElementById("guidance_scale").value || 1.0
           ),
+          true_cfg_scale: Number(
+            document.getElementById("true_cfg_scale").value || 1.0
+          ),
           num_images_per_prompt: 1,
           images,
         };
-
-        if (spec.id === "qwen") {
-          payload.true_cfg_scale = 4.0;
-        }
-        if (spec.id === "flux_uncensored") {
-          payload.strength = Number(document.getElementById("strength").value || 0.85);
-        }
-        if (spec.id === "florence2_flux") {
-          payload.florence_task = document.getElementById("florence_task").value;
-        }
 
         if (!payload.prompt) {
           setStatus("Prompt is required.");

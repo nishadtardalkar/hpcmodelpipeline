@@ -5,19 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from models.base import ModelBackend
-from models.florence2_flux import Florence2FluxBackend
-from models.flux_uncensored import FluxUncensoredBackend
-from models.qwen import QwenBackend
+from models.qwen_abliterated import QwenAbliteratedBackend
+from models.qwen_rapid_nsfw import QwenRapidNsfwBackend
 
 DEFAULT_MODELS_BASE = Path("./models")
 
 BACKENDS: dict[str, ModelBackend] = {
-    Florence2FluxBackend.id: Florence2FluxBackend(),
-    FluxUncensoredBackend.id: FluxUncensoredBackend(),
-    QwenBackend.id: QwenBackend(),
+    QwenAbliteratedBackend.id: QwenAbliteratedBackend(),
+    QwenRapidNsfwBackend.id: QwenRapidNsfwBackend(),
 }
 
-DEFAULT_MODEL_ID = QwenBackend.id
+DEFAULT_MODEL_ID = QwenAbliteratedBackend.id
 
 
 def weights_dir(model_id: str, base: Path | None = None) -> Path:

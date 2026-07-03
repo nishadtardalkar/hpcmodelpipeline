@@ -1,16 +1,16 @@
 # HPC Encrypted Model Pipeline
 
-Encrypted image-edit inference: browser encrypts jobs; login node stores ciphertext; GPU worker decrypts, runs the selected model, encrypts results.
+Encrypted Qwen image-edit inference: browser encrypts jobs; login node stores ciphertext; GPU worker decrypts, runs the selected model, encrypts results.
 
 ## Architecture
 
 ```
 models/
-  base.py            # ModelBackend interface
-  registry.py        # register backends, list_models()
-  qwen.py            # Qwen image-edit
-  flux_uncensored.py # FLUX.1-dev + Flux-Uncensored-V2 LoRA
-  florence2_flux.py  # Florence-2-Flux-Large (image → text)
+  base.py              # ModelBackend interface
+  registry.py          # register backends, list_models()
+  qwen_edit_ckpt.py    # shared single-file checkpoint loaders
+  qwen_abliterated.py  # Qwen-Edit-2509-Abliterated
+  qwen_rapid_nsfw.py   # Qwen Rapid AIO NSFW v23
 
 inference.py           # GPU worker CLI (--model, --session-key, …)
 login_node_server.py   # blind gateway + /api/models
@@ -26,21 +26,25 @@ templates/index.html   # model picker + encrypt in browser
 
 ## Models
 
-| ID | Name | Output | Images | Default path |
-|----|------|--------|--------|--------------|
-| `qwen` | Qwen Image Edit | Image | Required (1–2) | `./models/qwen` |
-| `flux_uncensored` | Flux Uncensored V2 | Image | Required (1) | `./models/flux_uncensored` |
-| `florence2_flux` | Florence-2 Flux Large | Text | Required (1) | `./models/florence2_flux` |
+| ID | Name | Images | Default path |
+|----|------|--------|--------------|
+| `qwen_abliterated` | Qwen Edit 2509 Abliterated | Required (1–2) | `./models/qwen_abliterated` |
+| `qwen_rapid_nsfw` | Qwen Rapid AIO NSFW v23 | Required (1–2) | `./models/qwen_rapid_nsfw` |
 
 Weights:
 
-- [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
-- [whrw/Flux-Uncensored-V2](https://huggingface.co/whrw/Flux-Uncensored-V2) LoRA on [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev)
-- [gokaygokay/Florence-2-Flux-Large](https://huggingface.co/gokaygokay/Florence-2-Flux-Large) (caption / describe image → text; remote code revision pinned)
+- [jiangchengchengNLP/Qwen-Edit-2509-abliterated](https://huggingface.co/jiangchengchengNLP/Qwen-Edit-2509-abliterated) on base [Qwen/Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)
+- [Phr00t/Qwen-Image-Edit-Rapid-AIO](https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO) NSFW v23 (`v23/Qwen-Rapid-AIO-NSFW-v23.safetensors`) on base [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
 
-Florence-2 uses `trust_remote_code=True`; the backend patches vendor files for transformers 4.50+ automatically after download.
+Each download stores:
 
-Flux download saves `base/` (FLUX.1-dev) and `lora/` (`lora.safetensors`) under the model directory. Accept the FLUX.1-dev license on Hugging Face before downloading.
+```
+./models/<model_id>/
+  base/                 # official Qwen-Image-Edit pipeline (VAE, text encoder, configs)
+  checkpoint.safetensors  # community transformer / AIO weights
+```
+
+Both models are tuned for **4-step** sampling with **CFG ≈ 1**. Defaults in the UI match that.
 
 Paths are `<models-base>/<model_id>` (default base: `./models`). Override with `--models-base`, `--model-path`, or `--download-path`.
 
@@ -66,33 +70,25 @@ Open `http://localhost:8080`, paste session key, choose a model, submit a job.
 
 ### 2) Download weights (internet node, no CUDA)
 
-**Qwen:**
+**Abliterated:**
 
 ```bash
-python inference.py --download-only --model qwen
-# saves to ./models/qwen
+python inference.py --download-only --model qwen_abliterated
+# saves to ./models/qwen_abliterated
 ```
 
-**Flux Uncensored V2** (large base model + LoRA):
+**Rapid AIO NSFW v23:**
 
 ```bash
-python inference.py --download-only --model flux_uncensored
-# saves to ./models/flux_uncensored/base and .../lora
-```
-
-**Florence-2 Flux Large** (image captioning, ~0.8B):
-
-```bash
-python inference.py --download-only --model florence2_flux
-# saves to ./models/florence2_flux
+python inference.py --download-only --model qwen_rapid_nsfw
+# saves to ./models/qwen_rapid_nsfw
 ```
 
 Custom base directory:
 
 ```bash
-python inference.py --download-only --model flux_uncensored \
+python inference.py --download-only --model qwen_abliterated \
   --models-base /path/to/weights
-# saves to /path/to/weights/flux_uncensored
 ```
 
 ### 3) GPU worker
@@ -100,18 +96,12 @@ python inference.py --download-only --model flux_uncensored \
 Start one worker per model (same session key, matching `--model` in UI):
 
 ```bash
-python inference.py --model qwen --session-key "<key>" --pipeline-root ./jobs/
+python inference.py --model qwen_abliterated --session-key "<key>" --pipeline-root ./jobs/
 ```
 
 ```bash
-python inference.py --model flux_uncensored --session-key "<key>" --pipeline-root ./jobs/
+python inference.py --model qwen_rapid_nsfw --session-key "<key>" --pipeline-root ./jobs/
 ```
-
-```bash
-python inference.py --model florence2_flux --session-key "<key>" --pipeline-root ./jobs/
-```
-
-Florence-2 returns encrypted **text** (description/caption) instead of a PNG; the UI shows it in the status panel when the job completes.
 
 ## Adding a model
 
