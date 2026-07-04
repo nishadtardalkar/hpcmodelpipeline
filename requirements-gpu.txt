@@ -6,3 +6,5 @@ safetensors
 pillow
 cryptography>=42.0
 huggingface_hub
+soundfile
+numpy

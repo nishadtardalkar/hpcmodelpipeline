@@ -29,7 +29,8 @@ class QwenRapidNsfwBackend(ModelBackend):
     id = "qwen_rapid_nsfw"
     display_name = "Qwen Rapid AIO NSFW v23"
     hf_id = CKPT_REPO
-    requires_images = True
+    category = "image_edit"
+    image_mode = "required"
 
     def download(self, dest: Path) -> None:
         download_base_and_checkpoint(

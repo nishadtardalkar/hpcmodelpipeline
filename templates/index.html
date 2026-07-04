@@ -51,12 +51,28 @@
         margin-top: 1rem;
         display: none;
       }
+      #audioPreview {
+        width: 100%;
+        margin-top: 1rem;
+        display: none;
+      }
+      #downloadLink {
+        display: none;
+        margin-top: 1rem;
+      }
       .note {
         color: #444;
         font-size: 0.95rem;
       }
-      #imagesRow.hidden {
-        display: none;
+      .hidden {
+        display: none !important;
+      }
+      #modelHint {
+        margin-top: 0.5rem;
+        font-style: italic;
+      }
+      optgroup {
+        font-weight: bold;
       }
     </style>
   </head>
@@ -80,19 +96,49 @@
 
       <label for="model" id="modelLabel">Model</label>
       <select id="model" name="model" required></select>
+      <p id="modelHint" class="note"></p>
 
       <div id="imagesRow">
-        <label for="images">Images (1 or 2, required)</label>
+        <label for="images" id="imagesLabel">Images</label>
         <input id="images" name="images" type="file" accept="image/*" multiple />
       </div>
 
-      <label for="prompt">Prompt</label>
+      <div id="meshRow" class="hidden">
+        <label for="mesh">3D mesh (GLB or OBJ)</label>
+        <input id="mesh" name="mesh" type="file" accept=".glb,.gltf,.obj,model/gltf-binary" />
+      </div>
+
+      <label for="prompt" id="promptLabel">Prompt</label>
       <textarea id="prompt" name="prompt" rows="4" required></textarea>
 
-      <label for="negative_prompt">Negative prompt</label>
-      <textarea id="negative_prompt" name="negative_prompt" rows="2"></textarea>
+      <div id="negativePromptRow">
+        <label for="negative_prompt">Negative prompt</label>
+        <textarea id="negative_prompt" name="negative_prompt" rows="2"></textarea>
+      </div>
 
-      <div class="grid">
+      <div class="grid" id="extraParams">
+        <div id="audioDurationRow" class="hidden">
+          <label for="audio_duration_s">Duration (seconds)</label>
+          <input id="audio_duration_s" name="audio_duration_s" type="number" value="30" min="1" max="600" step="1" />
+        </div>
+        <div id="resolutionRow" class="hidden">
+          <label for="resolution">Voxel resolution</label>
+          <select id="resolution" name="resolution">
+            <option value="512">512³</option>
+            <option value="1024" selected>1024³</option>
+            <option value="1536">1536³</option>
+          </select>
+        </div>
+        <div id="textureSizeRow" class="hidden">
+          <label for="texture_size">Texture size</label>
+          <select id="texture_size" name="texture_size">
+            <option value="2048">2048</option>
+            <option value="4096" selected>4096</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid" id="diffusionParams">
         <div>
           <label for="seed">Seed</label>
           <input id="seed" name="seed" type="number" value="0" />
@@ -105,7 +151,7 @@
           <label for="guidance_scale">Guidance scale</label>
           <input id="guidance_scale" name="guidance_scale" type="number" value="1.0" step="0.1" />
         </div>
-        <div>
+        <div id="trueCfgRow">
           <label for="true_cfg_scale">True CFG scale</label>
           <input id="true_cfg_scale" name="true_cfg_scale" type="number" value="1.0" step="0.1" />
         </div>
@@ -117,6 +163,8 @@
       <strong>Status</strong>
       <div id="status">Loading models…</div>
       <img id="preview" alt="Decrypted result preview" />
+      <audio id="audioPreview" controls></audio>
+      <a id="downloadLink" download="result.glb">Download 3D result</a>
     </div>
 
     <script>
@@ -124,13 +172,34 @@
       const OUT_MAGIC = "HPCOUT01";
       const KEY_LEN = 32;
 
+      const CATEGORY_LABELS = {
+        image_edit: "Image edit",
+        text_to_image: "Text / image generation",
+        image_to_3d: "Image to 3D",
+        text_to_audio: "Text to audio",
+        mesh_texture: "Mesh texture",
+      };
+
       const form = document.getElementById("jobForm");
       const statusEl = document.getElementById("status");
       const previewEl = document.getElementById("preview");
+      const audioPreviewEl = document.getElementById("audioPreview");
+      const downloadLinkEl = document.getElementById("downloadLink");
       const submitBtn = document.getElementById("submitBtn");
       const modelSelect = document.getElementById("model");
       const imagesRow = document.getElementById("imagesRow");
       const imagesInput = document.getElementById("images");
+      const imagesLabel = document.getElementById("imagesLabel");
+      const meshRow = document.getElementById("meshRow");
+      const meshInput = document.getElementById("mesh");
+      const modelHint = document.getElementById("modelHint");
+      const negativePromptRow = document.getElementById("negativePromptRow");
+      const audioDurationRow = document.getElementById("audioDurationRow");
+      const resolutionRow = document.getElementById("resolutionRow");
+      const textureSizeRow = document.getElementById("textureSizeRow");
+      const trueCfgRow = document.getElementById("trueCfgRow");
+      const promptLabel = document.getElementById("promptLabel");
+      const diffusionParams = document.getElementById("diffusionParams");
 
       let models = [];
       let currentJobId = null;
@@ -140,24 +209,91 @@
         statusEl.textContent = text;
       }
 
+      function hideResults() {
+        previewEl.style.display = "none";
+        audioPreviewEl.style.display = "none";
+        downloadLinkEl.style.display = "none";
+      }
+
       function selectedModel() {
         return models.find((m) => m.id === modelSelect.value);
+      }
+
+      function setVisible(el, show) {
+        el.classList.toggle("hidden", !show);
       }
 
       function updateModelUi() {
         const spec = selectedModel();
         if (!spec) return;
-        if (spec.requires_images) {
-          imagesRow.classList.remove("hidden");
+        const ui = spec.ui || {};
+        const defaults = ui.defaults || {};
+
+        modelHint.textContent = ui.hint || "";
+
+        if (spec.image_mode === "required") {
+          setVisible(imagesRow, true);
+          imagesLabel.textContent = "Images (1 or 2, required)";
           imagesInput.required = true;
+        } else if (spec.image_mode === "optional") {
+          setVisible(imagesRow, true);
+          imagesLabel.textContent = "Images (optional — for img2img / editing)";
+          imagesInput.required = false;
         } else {
-          imagesRow.classList.add("hidden");
+          setVisible(imagesRow, false);
           imagesInput.required = false;
           imagesInput.value = "";
         }
-        document.getElementById("num_inference_steps").value = "4";
-        document.getElementById("guidance_scale").value = "1.0";
-        document.getElementById("true_cfg_scale").value = "1.0";
+
+        if (ui.show_mesh || spec.requires_mesh) {
+          setVisible(meshRow, true);
+          meshInput.required = true;
+        } else {
+          setVisible(meshRow, false);
+          meshInput.required = false;
+          meshInput.value = "";
+        }
+
+        setVisible(negativePromptRow, !!ui.show_negative_prompt);
+        setVisible(audioDurationRow, !!ui.show_audio_duration);
+        setVisible(resolutionRow, !!ui.show_resolution);
+        setVisible(textureSizeRow, spec.category === "mesh_texture");
+        setVisible(trueCfgRow, !!ui.show_true_cfg);
+
+        if (spec.category === "mesh_texture") {
+          promptLabel.textContent = "Prompt (optional style hint)";
+          document.getElementById("prompt").required = false;
+        } else {
+          promptLabel.textContent = "Prompt";
+          document.getElementById("prompt").required = true;
+        }
+
+        if (spec.category === "text_to_audio") {
+          diffusionParams.classList.remove("hidden");
+        } else if (spec.category === "image_to_3d") {
+          setVisible(trueCfgRow, false);
+        }
+
+        document.getElementById("num_inference_steps").value = String(
+          defaults.num_inference_steps ?? 4
+        );
+        document.getElementById("guidance_scale").value = String(
+          defaults.guidance_scale ?? 1.0
+        );
+        document.getElementById("true_cfg_scale").value = String(
+          defaults.true_cfg_scale ?? 1.0
+        );
+        if (defaults.audio_duration_s != null) {
+          document.getElementById("audio_duration_s").value = String(
+            defaults.audio_duration_s
+          );
+        }
+        if (defaults.resolution != null) {
+          document.getElementById("resolution").value = String(defaults.resolution);
+        }
+        if (defaults.texture_size != null) {
+          document.getElementById("texture_size").value = String(defaults.texture_size);
+        }
       }
 
       async function loadModels() {
@@ -165,13 +301,45 @@
         if (!response.ok) throw new Error("Could not load model list.");
         const body = await response.json();
         models = body.models;
-        modelSelect.innerHTML = "";
+
+        const byCategory = {};
         for (const m of models) {
-          const opt = document.createElement("option");
-          opt.value = m.id;
-          opt.textContent = m.display_name;
-          modelSelect.appendChild(opt);
+          const cat = m.category || "other";
+          if (!byCategory[cat]) byCategory[cat] = [];
+          byCategory[cat].push(m);
         }
+
+        modelSelect.innerHTML = "";
+        const categoryOrder = [
+          "image_edit",
+          "text_to_image",
+          "image_to_3d",
+          "mesh_texture",
+          "text_to_audio",
+        ];
+        for (const cat of categoryOrder) {
+          const groupModels = byCategory[cat];
+          if (!groupModels || !groupModels.length) continue;
+          const group = document.createElement("optgroup");
+          group.label = CATEGORY_LABELS[cat] || cat;
+          for (const m of groupModels) {
+            const opt = document.createElement("option");
+            opt.value = m.id;
+            opt.textContent = m.display_name;
+            group.appendChild(opt);
+          }
+          modelSelect.appendChild(group);
+        }
+        for (const cat of Object.keys(byCategory)) {
+          if (categoryOrder.includes(cat)) continue;
+          for (const m of byCategory[cat]) {
+            const opt = document.createElement("option");
+            opt.value = m.id;
+            opt.textContent = m.display_name;
+            modelSelect.appendChild(opt);
+          }
+        }
+
         const showModelPicker = models.length > 1;
         document.getElementById("modelLabel").style.display = showModelPicker ? "block" : "none";
         modelSelect.style.display = showModelPicker ? "block" : "none";
@@ -261,13 +429,30 @@
             sessionKeyBytes,
             await resultResp.blob()
           );
-          if (body.output_kind === "text") {
-            previewEl.style.display = "none";
+          hideResults();
+
+          const kind = body.output_kind || "image";
+          if (kind === "text") {
             const text = new TextDecoder().decode(plain);
             setStatus(`Job ${currentJobId} complete.\n\n${text}`);
+          } else if (kind === "audio") {
+            const mime = body.output_mime || "audio/wav";
+            audioPreviewEl.src = URL.createObjectURL(
+              new Blob([plain], { type: mime })
+            );
+            audioPreviewEl.style.display = "block";
+            setStatus(`Job ${currentJobId} complete. Audio decrypted in your browser.`);
+          } else if (kind === "model3d") {
+            const mime = body.output_mime || "model/gltf-binary";
+            const blob = new Blob([plain], { type: mime });
+            downloadLinkEl.href = URL.createObjectURL(blob);
+            downloadLinkEl.download = "result.glb";
+            downloadLinkEl.style.display = "inline-block";
+            downloadLinkEl.textContent = "Download 3D result (GLB)";
+            setStatus(`Job ${currentJobId} complete. 3D model ready to download.`);
           } else {
             previewEl.src = URL.createObjectURL(
-              new Blob([plain], { type: "image/png" })
+              new Blob([plain], { type: body.output_mime || "image/png" })
             );
             previewEl.style.display = "block";
             setStatus(`Job ${currentJobId} complete. Result decrypted in your browser.`);
@@ -285,7 +470,7 @@
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
-        previewEl.style.display = "none";
+        hideResults();
 
         let sessionKeyBytes;
         try {
@@ -304,8 +489,18 @@
         }
 
         const files = imagesInput.files;
-        if (spec.requires_images && (files.length < 1 || files.length > 2)) {
-          setStatus("This model requires 1 or 2 images.");
+        if (spec.image_mode === "required") {
+          if (files.length < 1 || files.length > 2) {
+            setStatus("This model requires 1 or 2 images.");
+            return;
+          }
+        } else if (spec.image_mode === "optional" && files.length > 2) {
+          setStatus("At most 2 images allowed.");
+          return;
+        }
+
+        if (spec.requires_mesh && !meshInput.files.length) {
+          setStatus("This model requires a 3D mesh file.");
           return;
         }
 
@@ -335,7 +530,32 @@
           images,
         };
 
-        if (!payload.prompt) {
+        if (spec.ui?.show_audio_duration) {
+          payload.audio_duration_s = Number(
+            document.getElementById("audio_duration_s").value || 30
+          );
+        }
+        if (spec.ui?.show_resolution) {
+          payload.resolution = Number(
+            document.getElementById("resolution").value || 1024
+          );
+        }
+        if (spec.category === "mesh_texture") {
+          payload.texture_size = Number(
+            document.getElementById("texture_size").value || 4096
+          );
+        }
+
+        if (spec.requires_mesh && meshInput.files.length) {
+          const meshFile = meshInput.files[0];
+          payload.mesh = {
+            data_b64: await fileToBase64(meshFile),
+            mime: meshFile.type || "application/octet-stream",
+            filename: meshFile.name,
+          };
+        }
+
+        if (spec.category !== "mesh_texture" && !payload.prompt) {
           setStatus("Prompt is required.");
           return;
         }

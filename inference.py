@@ -115,6 +115,7 @@ def write_status(
     *,
     error: str | None = None,
     output_kind: str | None = None,
+    output_mime: str | None = None,
 ) -> None:
     job_dir = ARTIFACTS / job_id
     _private_dir(job_dir)
@@ -124,6 +125,8 @@ def write_status(
         body["error"] = error[:2000]
     if output_kind:
         body["output_kind"] = output_kind
+    if output_mime:
+        body["output_mime"] = output_mime
     status_path.write_text(json.dumps(body, indent=2), encoding="utf-8")
     status_path.chmod(0o600)
 
@@ -154,7 +157,9 @@ def process_job(
 
         out = backend.infer(pipeline, payload)
 
-        if isinstance(out, str):
+        if isinstance(out, bytes):
+            output_bytes = out
+        elif isinstance(out, str):
             output_bytes = out.encode("utf-8")
         else:
             buf = io.BytesIO()
@@ -168,7 +173,12 @@ def process_job(
         output_path.write_bytes(output_enc)
         output_path.chmod(0o600)
 
-        write_status(job_id, "done", output_kind=backend.output_kind)
+        write_status(
+            job_id,
+            "done",
+            output_kind=backend.output_kind,
+            output_mime=getattr(backend, "output_mime", None),
+        )
         shutil.move(str(processing_path), str(JOBS_DONE / processing_path.name))
         print(f"completed {job_id}")
     except Exception as exc:  # pragma: no cover

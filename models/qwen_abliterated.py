@@ -20,11 +20,8 @@ from models.qwen_edit_ckpt import (
 
 BASE_HF_ID = "Qwen/Qwen-Image-Edit-2509"
 CKPT_REPO = "jiangchengchengNLP/Qwen-Edit-2509-abliterated"
-# Prefer v1.2 FP8 diffusion weights (ComfyUI UNETLoader name), then older root file.
+# Root checkpoint on HF (ComfyUI workflow names like v1.2-fp8 are local filenames only).
 CKPT_FILES = [
-    "v1.2/qwen-image-edit-abliterated-v1.2-fp8-4steps.safetensors",
-    "qwen-image-edit-abliterated-v1.2-fp8-4steps.safetensors",
-    "v1.2/Qwen-Edit-abliterated-4step-v1.safetensors",
     "Qwen-Edit-abliterated-4step-v1.safetensors",
 ]
 
@@ -33,7 +30,8 @@ class QwenAbliteratedBackend(ModelBackend):
     id = "qwen_abliterated"
     display_name = "Qwen Edit 2509 Abliterated"
     hf_id = CKPT_REPO
-    requires_images = True
+    category = "image_edit"
+    image_mode = "required"
 
     def download(self, dest: Path) -> None:
         download_base_and_checkpoint(

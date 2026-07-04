@@ -91,3 +91,10 @@ def payload_to_images(payload: dict[str, Any]) -> list[Image.Image]:
         raw = base64.b64decode(entry["data_b64"])
         images.append(Image.open(io.BytesIO(raw)))
     return images
+
+
+def payload_to_mesh_bytes(payload: dict[str, Any]) -> bytes | None:
+    mesh = payload.get("mesh")
+    if not mesh or not mesh.get("data_b64"):
+        return None
+    return base64.b64decode(mesh["data_b64"])
