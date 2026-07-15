@@ -9,6 +9,7 @@ from models.base import ModelBackend
 from models.flux2_dev import Flux2DevBackend
 from models.hunyuan3d_paint import Hunyuan3DPaintBackend
 from models.qwen_abliterated import QwenAbliteratedBackend
+from models.qwen_edit_2511 import QwenEdit2511Backend
 from models.qwen_rapid_nsfw import QwenRapidNsfwBackend
 from models.stable_audio import StableAudioOpenBackend
 from models.trellis2_4b import Trellis24BBackend
@@ -20,6 +21,7 @@ BACKENDS: dict[str, ModelBackend] = {
     Flux2DevBackend.id: Flux2DevBackend(),
     Hunyuan3DPaintBackend.id: Hunyuan3DPaintBackend(),
     QwenAbliteratedBackend.id: QwenAbliteratedBackend(),
+    QwenEdit2511Backend.id: QwenEdit2511Backend(),
     QwenRapidNsfwBackend.id: QwenRapidNsfwBackend(),
     StableAudioOpenBackend.id: StableAudioOpenBackend(),
     Trellis24BBackend.id: Trellis24BBackend(),
